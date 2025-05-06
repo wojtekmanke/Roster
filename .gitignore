@@ -1,0 +1,24 @@
+# Binaries
+/bin/
+/roster
+
+# Dashboard
+/web/node_modules/
+/web/dist/
+/web/coverage/
+
+# Local configuration
+.env
+.env.*
+!.env.example
+
+# Terraform
+deploy/terraform/.terraform/
+deploy/terraform/*.tfstate*
+deploy/terraform/*.tfvars
+!deploy/terraform/example.tfvars
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/
