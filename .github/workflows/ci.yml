@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: roster
+          POSTGRES_PASSWORD: roster
+          POSTGRES_DB: roster
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U roster"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 20
+    env:
+      ROSTER_TEST_DATABASE_URL: postgres://roster:roster@localhost:5432/roster?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test -race ./...
