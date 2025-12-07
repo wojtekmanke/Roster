@@ -109,6 +109,12 @@ func (s *Set) add(t Tool) error {
 	if err := t.compile(); err != nil {
 		return err
 	}
+	// Anything that needs a person's sign-off changes the world. Enforcing it
+	// here covers builtins and MCP tools as well as flags set in the spec, so
+	// a shadow run can never reach an approval-gated call.
+	if t.RequiresApproval {
+		t.SideEffect = true
+	}
 	s.tools[t.Name] = &t
 	s.order = append(s.order, t.Name)
 	return nil

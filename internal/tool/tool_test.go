@@ -82,7 +82,6 @@ func TestBuildBuiltin(t *testing.T) {
 			Description:      "Refund an order",
 			InputSchema:      json.RawMessage(`{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}`),
 			RequiresApproval: true,
-			SideEffect:       true,
 			Handler:          echo,
 		},
 	}}
@@ -94,8 +93,13 @@ func TestBuildBuiltin(t *testing.T) {
 	defer set.Close()
 
 	got, _ := set.Get("refund_order")
-	if got.Description != "Refund an order" || !got.RequiresApproval || !got.SideEffect {
+	if got.Description != "Refund an order" || !got.RequiresApproval {
 		t.Errorf("builtin metadata not inherited: %+v", got)
+	}
+	// The builtin only said it needs approval; that alone makes it a side
+	// effect, so shadow runs simulate it instead of asking a person.
+	if !got.SideEffect {
+		t.Error("an approval-gated tool was not treated as a side effect")
 	}
 	if err := got.Validate(json.RawMessage(`{}`)); err == nil {
 		t.Error("builtin schema not applied")
