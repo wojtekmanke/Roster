@@ -183,6 +183,10 @@ func TestRunLifecycleWithApproval(t *testing.T) {
 	if err != nil || len(pending) != 2 {
 		t.Fatalf("pending approvals = %d, %v", len(pending), err)
 	}
+	// Both rows share a transaction timestamp, so their order is arbitrary.
+	if pending[0].ToolUseID != "c1" {
+		pending[0], pending[1] = pending[1], pending[0]
+	}
 
 	// Saving the same suspension again must not duplicate the approvals.
 	if _, err := s.SaveOutcome(ctx, run, suspended); err != nil {
