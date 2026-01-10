@@ -131,19 +131,26 @@ func (s *Store) ScoredRuns(ctx context.Context, w ScoreWindow) ([]ScoredRun, err
 	return runs, rows.Err()
 }
 
-// ModelUse says how many finished runs an agent has on one model.
+// ModelUse summarises an agent's finished runs on one model.
 type ModelUse struct {
-	Provider string `db:"provider"`
-	Model    string `db:"model"`
-	Shadow   bool   `db:"shadow"`
-	Runs     int    `db:"runs"`
+	Provider  string  `db:"provider"`
+	Model     string  `db:"model"`
+	Shadow    bool    `db:"shadow"`
+	Runs      int     `db:"runs"`
+	Succeeded int     `db:"succeeded"`
+	AvgCost   float64 `db:"avg_cost"`
+	AvgMS     float64 `db:"avg_ms"`
 }
 
-// ModelsUsed lists the models an agent has finished runs on since the given
-// instant, primary model first.
+// ModelsUsed summarises the models an agent has finished runs on since the
+// given instant, primary runs first.
 func (s *Store) ModelsUsed(ctx context.Context, agentID string, since time.Time) ([]ModelUse, error) {
 	rows, err := s.Pool.Query(ctx, `
-		select provider, model, shadow_of is not null as shadow, count(*)::int as runs
+		select provider, model, shadow_of is not null as shadow,
+			count(*)::int as runs,
+			(count(*) filter (where status = 'succeeded'))::int as succeeded,
+			avg(cost_usd)::float8 as avg_cost,
+			avg(active_ms)::float8 as avg_ms
 		from runs
 		where agent_id = $1 and finished_at >= $2
 		group by 1, 2, 3
