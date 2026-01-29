@@ -1,0 +1,212 @@
+"Arbitrary JSON."
+scalar JSON
+
+"An RFC 3339 timestamp."
+scalar Time
+
+type Query {
+  "Fleet-wide counters for the dashboard header."
+  fleet: Fleet!
+  agents: [Agent!]!
+  agent(name: String!): Agent
+  "Runs, newest first. Shadow runs are included unless an agent's own `runs` field is used."
+  runs(agent: String, status: String, limit: Int): [Run!]!
+  run(id: ID!): Run
+  "Approvals, oldest first. Defaults to the pending ones."
+  approvals(status: String): [Approval!]!
+}
+
+type Mutation {
+  "Create the agent described by the YAML spec, or update the agent of that name."
+  applyAgent(spec: String!): Agent!
+  pauseAgent(name: String!, reason: String!): Agent!
+  "Return a paused agent to work and restart its review window."
+  resumeAgent(name: String!, reason: String): Agent!
+  "Permanently stop an agent. Its queued work is dropped."
+  retireAgent(name: String!, reason: String!): Agent!
+  "Queue one run. `expected` is ground truth for grading and is never shown to the agent."
+  triggerAgent(name: String!, input: JSON, expected: JSON): Boolean!
+  "Deliver an event to every active agent subscribed to it. Returns the number of runs queued."
+  emitEvent(name: String!, payload: JSON, expected: JSON): Int!
+  decideApproval(id: ID!, approve: Boolean!, reason: String): Approval!
+  "Attach ground truth to a run after the fact and grade it again."
+  labelRun(id: ID!, expected: JSON!): Run!
+}
+
+type Fleet {
+  active: Int!
+  paused: Int!
+  retired: Int!
+  pendingApprovals: Int!
+  queueDepth: Int!
+  "Primary runs started in the last 24 hours."
+  runs24h: Int!
+  "Model spend of primary runs started in the last 24 hours."
+  costUsd24h: Float!
+}
+
+type Agent {
+  id: ID!
+  name: String!
+  description: String!
+  "active, paused or retired."
+  status: String!
+  "Why the agent is paused or retired."
+  statusReason: String!
+  provider: String!
+  model: String!
+  specYaml: String!
+  "Scorecards count runs finished after this instant."
+  reviewSince: Time!
+  createdAt: Time!
+  updatedAt: Time!
+  "What starts the agent, in words."
+  triggers: [String!]!
+  tools: [AgentTool!]!
+  review: ReviewPolicy!
+  "Primary runs over the last 24 hours."
+  stats: AgentStats!
+  "Standing on the agent's own model over the current review window."
+  scorecard: Scorecard!
+  "One scorecard per model the agent has run on, primary first, then shadows."
+  comparison: [ModelScorecard!]!
+  "Primary runs, newest first."
+  runs(limit: Int): [Run!]!
+  events(limit: Int): [AgentEvent!]!
+}
+
+type AgentTool {
+  name: String!
+  description: String!
+  "graphql, builtin or mcp."
+  kind: String!
+  sideEffect: Boolean!
+  requiresApproval: Boolean!
+}
+
+type ReviewPolicy {
+  window: Int!
+  minRuns: Int!
+  "pause or alert."
+  onBreach: String!
+}
+
+type AgentStats {
+  runs: Int!
+  succeeded: Int!
+  failed: Int!
+  awaitingApproval: Int!
+  costUsd: Float!
+  lastRunAt: Time
+}
+
+type Scorecard {
+  "Graded runs in the window."
+  runs: Int!
+  kpis: [KPI!]!
+}
+
+type KPI {
+  name: String!
+  grader: String!
+  aggregate: String!
+  "Null until at least one run has a value for this KPI."
+  value: Float
+  samples: Int!
+  "For example \">= 0.85\". Null when the KPI is only tracked."
+  target: String
+  "ok, breach, insufficient_data or no_target."
+  status: String!
+}
+
+type ModelScorecard {
+  provider: String!
+  model: String!
+  shadow: Boolean!
+  runs: Int!
+  succeeded: Int!
+  avgCostUsd: Float!
+  avgSeconds: Float!
+  scorecard: Scorecard!
+}
+
+type AgentEvent {
+  id: ID!
+  kind: String!
+  actor: String!
+  reason: String!
+  createdAt: Time!
+}
+
+type Run {
+  id: ID!
+  agent: Agent!
+  "running, awaiting_approval, succeeded or failed."
+  status: String!
+  trigger: String!
+  input: JSON
+  expected: JSON
+  output: JSON
+  error: String!
+  provider: String!
+  model: String!
+  "Set on shadow runs: the primary run whose input this one replays."
+  shadowOf: ID
+  shadows: [Run!]!
+  inputTokens: Int!
+  outputTokens: Int!
+  cacheReadTokens: Int!
+  cacheWriteTokens: Int!
+  costUsd: Float!
+  llmCalls: Int!
+  toolCalls: Int!
+  "Milliseconds spent executing, excluding time waiting for approval."
+  activeMs: Int!
+  startedAt: Time!
+  finishedAt: Time
+  steps: [Step!]!
+  approvals: [Approval!]!
+  scores: [Score!]!
+}
+
+type Step {
+  seq: Int!
+  "llm or tool."
+  kind: String!
+  "The model that answered, or the tool that was called."
+  name: String!
+  input: JSON
+  output: JSON
+  isError: Boolean!
+  "True for side effects a shadow run skipped."
+  simulated: Boolean!
+  inputTokens: Int!
+  outputTokens: Int!
+  cacheReadTokens: Int!
+  cacheWriteTokens: Int!
+  costUsd: Float!
+  latencyMs: Int!
+  createdAt: Time!
+}
+
+type Approval {
+  id: ID!
+  run: Run!
+  agent: Agent!
+  tool: String!
+  input: JSON
+  "pending, approved or rejected."
+  status: String!
+  decidedBy: String!
+  reason: String!
+  createdAt: Time!
+  decidedAt: Time
+}
+
+type Score {
+  kpi: String!
+  grader: String!
+  metric: String!
+  value: Float!
+  detail: JSON
+}

@@ -1,0 +1,63 @@
+# Regenerate with `make generate`.
+schema:
+  - schema.graphqls
+
+exec:
+  filename: generated.go
+  package: graph
+
+model:
+  filename: models_gen.go
+  package: graph
+
+resolver:
+  layout: follow-schema
+  dir: .
+  package: graph
+  filename_template: "{name}.resolvers.go"
+
+# Persistence structs double as GraphQL models where the shapes line up, so
+# resolvers only exist for fields that need a lookup or a computation.
+models:
+  ID:
+    model: github.com/99designs/gqlgen/graphql.ID
+  Int:
+    model:
+      - github.com/99designs/gqlgen/graphql.Int
+      - github.com/99designs/gqlgen/graphql.Int64
+  JSON:
+    model: github.com/wojtekmanke/roster/internal/graph/scalar.JSON
+  Time:
+    model: github.com/99designs/gqlgen/graphql.Time
+  Agent:
+    model: github.com/wojtekmanke/roster/internal/store.Agent
+    fields:
+      triggers: {resolver: true}
+      tools: {resolver: true}
+      review: {resolver: true}
+      stats: {resolver: true}
+      scorecard: {resolver: true}
+      comparison: {resolver: true}
+      runs: {resolver: true}
+      events: {resolver: true}
+  AgentStats:
+    model: github.com/wojtekmanke/roster/internal/store.AgentStats
+  AgentEvent:
+    model: github.com/wojtekmanke/roster/internal/store.AgentEvent
+  Run:
+    model: github.com/wojtekmanke/roster/internal/store.Run
+    fields:
+      agent: {resolver: true}
+      shadows: {resolver: true}
+      steps: {resolver: true}
+      approvals: {resolver: true}
+      scores: {resolver: true}
+  Step:
+    model: github.com/wojtekmanke/roster/internal/store.Step
+  Approval:
+    model: github.com/wojtekmanke/roster/internal/store.Approval
+    fields:
+      run: {resolver: true}
+      agent: {resolver: true}
+  Score:
+    model: github.com/wojtekmanke/roster/internal/store.Score

@@ -23,8 +23,7 @@ vet: ## Run go vet
 
 .PHONY: generate
 generate: ## Regenerate GraphQL server code
-	go tool gqlgen generate --config internal/graph/gqlgen.yml
-	go tool gqlgen generate --config internal/shop/graph/gqlgen.yml
+	cd internal/graph && go tool gqlgen generate
 
 .PHONY: web
 web: ## Build the dashboard
