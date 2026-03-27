@@ -1,0 +1,111 @@
+"An RFC 3339 timestamp."
+scalar Time
+
+type Query {
+  ticket(id: ID!): Ticket
+  order(id: ID!): Order
+  customer(id: ID!): Customer
+  product(sku: ID!): Product
+  inventory(sku: ID!): Inventory
+  "The last 24 hours at a glance."
+  dailySummary: DailySummary!
+}
+
+type Mutation {
+  "Answer an open ticket."
+  replyToTicket(id: ID!, body: String!): Ticket!
+  "Hand an open ticket to a person."
+  escalateTicket(id: ID!, reason: String!): Ticket!
+  "Change catalogue fields. Omitted fields are left alone."
+  updateProduct(sku: ID!, category: String, color: String, material: String, description: String): Product!
+  "Order stock from the supplier."
+  createPurchaseOrder(sku: ID!, quantity: Int!, note: String): PurchaseOrder!
+  "Stop a processing order from shipping until someone reviews it."
+  holdOrder(id: ID!, reason: String!): Order!
+}
+
+type Ticket {
+  id: ID!
+  subject: String!
+  body: String!
+  "open, answered or escalated."
+  status: String!
+  reply: String!
+  escalationReason: String!
+  createdAt: Time!
+  customer: Customer!
+  "The order the ticket refers to, when the customer gave one."
+  order: Order
+}
+
+type Order {
+  id: ID!
+  "processing, shipped, delivered, cancelled or on_hold."
+  status: String!
+  items: String!
+  totalCents: Int!
+  billingCountry: String!
+  shippingCountry: String!
+  "Country of the IP address the order was placed from."
+  ipCountry: String!
+  paymentAttempts: Int!
+  carrier: String!
+  tracking: String!
+  eta: String!
+  holdReason: String!
+  placedAt: Time!
+  customer: Customer!
+}
+
+type Customer {
+  id: ID!
+  email: String!
+  name: String!
+  country: String!
+  ordersCount: Int!
+  chargebacks: Int!
+  createdAt: Time!
+  accountAgeDays: Int!
+}
+
+type Product {
+  sku: ID!
+  title: String!
+  description: String!
+  category: String!
+  color: String!
+  material: String!
+  priceCents: Int!
+}
+
+type Inventory {
+  sku: ID!
+  onHand: Int!
+  onOrder: Int!
+  "Average units sold per day."
+  dailySales: Float!
+  "Days between ordering from the supplier and receiving the stock."
+  leadTimeDays: Int!
+  "Days of stock the shop wants left when a delivery arrives."
+  coverDays: Int!
+  "Suppliers sell in multiples of this."
+  packSize: Int!
+  unitCostCents: Int!
+}
+
+type PurchaseOrder {
+  id: ID!
+  sku: ID!
+  quantity: Int!
+  note: String!
+  createdAt: Time!
+}
+
+type DailySummary {
+  ordersPlaced: Int!
+  revenueCents: Int!
+  openTickets: Int!
+  escalatedTickets: Int!
+  ordersOnHold: Int!
+  skusToReorder: Int!
+}

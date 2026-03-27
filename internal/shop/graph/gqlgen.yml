@@ -1,0 +1,42 @@
+# Regenerate with `make generate`.
+schema:
+  - schema.graphqls
+
+exec:
+  filename: generated.go
+  package: graph
+
+model:
+  filename: models_gen.go
+  package: graph
+
+resolver:
+  layout: follow-schema
+  dir: .
+  package: graph
+  filename_template: "{name}.resolvers.go"
+
+models:
+  ID:
+    model: github.com/99designs/gqlgen/graphql.ID
+  Time:
+    model: github.com/99designs/gqlgen/graphql.Time
+  Ticket:
+    model: github.com/wojtekmanke/roster/internal/shop.Ticket
+    fields:
+      customer: {resolver: true}
+      order: {resolver: true}
+  Order:
+    model: github.com/wojtekmanke/roster/internal/shop.Order
+    fields:
+      customer: {resolver: true}
+  Customer:
+    model: github.com/wojtekmanke/roster/internal/shop.Customer
+  Product:
+    model: github.com/wojtekmanke/roster/internal/shop.Product
+  Inventory:
+    model: github.com/wojtekmanke/roster/internal/shop.Inventory
+  PurchaseOrder:
+    model: github.com/wojtekmanke/roster/internal/shop.PurchaseOrder
+  DailySummary:
+    model: github.com/wojtekmanke/roster/internal/shop.DailySummary
