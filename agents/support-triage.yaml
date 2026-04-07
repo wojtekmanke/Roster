@@ -1,0 +1,145 @@
+name: support-triage
+description: Answers order-status tickets and escalates everything else.
+
+model:
+  provider: anthropic
+  name: claude-opus-5-5
+  effort: low
+  # If a safety classifier declines a request, let the API retry it on the
+  # fallback model it recommends instead of failing the run.
+  fallbacks: default
+
+instructions: |
+  You are the first line of support for an online shop. Each run gives you one
+  ticket ID.
+
+  Fetch the ticket, then decide:
+
+  - Reply yourself only when the customer is asking where an order is, the
+    ticket is linked to an order, and that order's status is "processing" or
+    "shipped". Tell them the status in plain words, and the carrier, tracking
+    number and expected delivery date when the order has them.
+  - Escalate everything else to a person. That includes refunds, cancellations,
+    damaged or wrong items, complaints, a ticket with no order linked, and an
+    order marked "delivered" that the customer says has not arrived. Give the
+    reason in one sentence.
+
+  Never promise a refund, a replacement or a delivery date that is not in the
+  order record.
+
+  When you have replied or escalated, submit your result. Set order_status to
+  the order's status exactly as the record shows it when you replied, and leave
+  it out when you escalated.
+
+prompt: "Handle support ticket {{.ticket_id}}."
+
+triggers:
+  - event: ticket.created
+
+tools:
+  - name: get_ticket
+    description: Fetch a support ticket with the customer and the order it refers to, if any.
+    input_schema:
+      type: object
+      properties:
+        id: {type: string, description: "Ticket ID, for example T-104"}
+      required: [id]
+      additionalProperties: false
+    graphql:
+      endpoint: ${SHOP_GRAPHQL_URL}
+      headers: {Authorization: "Bearer ${SHOP_API_TOKEN}"}
+      query: |
+        query($id: ID!) {
+          ticket(id: $id) {
+            id subject body status
+            customer { name }
+            order { id status items carrier tracking eta placedAt }
+          }
+        }
+
+  - name: reply_to_ticket
+    description: Send the customer a reply and close the ticket as answered.
+    side_effect: true
+    input_schema:
+      type: object
+      properties:
+        id: {type: string}
+        body: {type: string, description: "The message to the customer"}
+      required: [id, body]
+      additionalProperties: false
+    graphql:
+      endpoint: ${SHOP_GRAPHQL_URL}
+      headers: {Authorization: "Bearer ${SHOP_API_TOKEN}"}
+      query: |
+        mutation($id: ID!, $body: String!) {
+          replyToTicket(id: $id, body: $body) { id status }
+        }
+
+  - name: escalate_ticket
+    description: Hand the ticket to a human agent with a one-sentence reason.
+    side_effect: true
+    input_schema:
+      type: object
+      properties:
+        id: {type: string}
+        reason: {type: string}
+      required: [id, reason]
+      additionalProperties: false
+    graphql:
+      endpoint: ${SHOP_GRAPHQL_URL}
+      headers: {Authorization: "Bearer ${SHOP_API_TOKEN}"}
+      query: |
+        mutation($id: ID!, $reason: String!) {
+          escalateTicket(id: $id, reason: $reason) { id status }
+        }
+
+output:
+  schema:
+    type: object
+    properties:
+      action: {type: string, enum: [reply, escalate]}
+      order_status: {type: string, description: "The order's status, when you replied"}
+      summary: {type: string, description: "One sentence on what you did and why"}
+    required: [action, summary]
+    additionalProperties: false
+
+limits:
+  max_steps: 6
+  max_cost_usd: 0.25
+  timeout: 2m
+
+kpis:
+  - name: right_call
+    grader: expected
+    params: {fields: [action]}
+    target: ">= 0.95"
+  - name: status_correct
+    grader: expected
+    params: {fields: [order_status]}
+    target: ">= 0.98"
+  # Missing an escalation is the expensive mistake: a customer with a real
+  # problem gets a canned status update.
+  - name: escalations_caught
+    grader: classification
+    metric: recall
+    params: {field: action, positive: escalate}
+    target: ">= 0.98"
+  - name: cost_per_ticket
+    grader: cost
+    target: "<= 0.03"
+  - name: p95_seconds
+    grader: latency
+    aggregate: p95
+
+review:
+  window: 100
+  min_runs: 20
+  on_breach: pause
+
+# Replay every ticket on two cheaper candidates, with replies and escalations
+# simulated, to see whether either could take over.
+shadow:
+  - provider: xai
+    name: grok-4.3
+  - provider: ollama
+    name: llama3.2
