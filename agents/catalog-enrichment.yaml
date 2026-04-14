@@ -1,0 +1,125 @@
+name: catalog-enrichment
+description: Fills in category, colour, material and a description for new products.
+
+model:
+  provider: anthropic
+  name: claude-opus-5-5
+  effort: low
+  fallbacks: default
+
+instructions: |
+  You maintain the product catalogue of an online shop. Each run gives you the
+  SKU of a product that was added with only a title.
+
+  Fetch the product. From its title, work out:
+
+  - category: one of apparel, drinkware, bags, stationery, home
+  - color: one of black, white, blue, red, green, yellow, grey, brown, pink, orange
+  - material: one of cotton, polyester, wool, ceramic, stainless steel, glass,
+    canvas, paper, bamboo
+
+  Titles use trade names. Map them to the plain value: "Navy" is blue,
+  "Charcoal" is grey, "Stoneware" is ceramic, "Merino" is wool, "Kraft" is
+  paper, and so on. Always choose from the lists above.
+
+  Then write a description of one or two sentences for the product page. State
+  what the product is, its material and its colour. Do not invent features,
+  dimensions or claims that the title does not support.
+
+  Save all four fields with update_product, then submit the same values.
+
+prompt: "Enrich product {{.sku}}."
+
+triggers:
+  - event: product.created
+
+tools:
+  - name: get_product
+    description: Fetch a product's catalogue entry.
+    input_schema:
+      type: object
+      properties:
+        sku: {type: string}
+      required: [sku]
+      additionalProperties: false
+    graphql:
+      endpoint: ${SHOP_GRAPHQL_URL}
+      headers: {Authorization: "Bearer ${SHOP_API_TOKEN}"}
+      query: |
+        query($sku: ID!) {
+          product(sku: $sku) { sku title description category color material priceCents }
+        }
+
+  - name: update_product
+    description: Save catalogue fields on a product.
+    side_effect: true
+    input_schema:
+      type: object
+      properties:
+        sku: {type: string}
+        category: {type: string}
+        color: {type: string}
+        material: {type: string}
+        description: {type: string}
+      required: [sku, category, color, material, description]
+      additionalProperties: false
+    graphql:
+      endpoint: ${SHOP_GRAPHQL_URL}
+      headers: {Authorization: "Bearer ${SHOP_API_TOKEN}"}
+      query: |
+        mutation($sku: ID!, $category: String, $color: String, $material: String, $description: String) {
+          updateProduct(sku: $sku, category: $category, color: $color, material: $material, description: $description) {
+            sku category color material
+          }
+        }
+
+output:
+  schema:
+    type: object
+    properties:
+      category: {type: string, enum: [apparel, drinkware, bags, stationery, home]}
+      color: {type: string, enum: [black, white, blue, red, green, yellow, grey, brown, pink, orange]}
+      material: {type: string, enum: [cotton, polyester, wool, ceramic, stainless steel, glass, canvas, paper, bamboo]}
+      description: {type: string}
+    required: [category, color, material, description]
+    additionalProperties: false
+
+limits:
+  max_steps: 5
+  max_cost_usd: 0.20
+  timeout: 2m
+
+kpis:
+  - name: all_attributes_right
+    grader: expected
+    params: {fields: [category, color, material]}
+    target: ">= 0.9"
+  - name: attribute_accuracy
+    grader: expected
+    metric: field_accuracy
+    params: {fields: [category, color, material]}
+    target: ">= 0.97"
+  # No rule can tell whether a description reads well, so a model grades it.
+  - name: description_quality
+    grader: judge
+    params:
+      model: {provider: anthropic, name: claude-opus-5-5, effort: low}
+      rubric: |
+        Score the description field of the agent's output.
+        5: one or two clear sentences that name what the product is, its
+           material and its colour, and claim nothing the title does not support.
+        3: accurate but vague, padded, or missing the material or the colour.
+        1: invents features, dimensions or claims, or does not describe the product.
+    target: ">= 4"
+  - name: cost_per_product
+    grader: cost
+    target: "<= 0.03"
+
+review:
+  window: 100
+  min_runs: 20
+  on_breach: pause
+
+shadow:
+  - provider: openai
+    name: gpt-6-luna
