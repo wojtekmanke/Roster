@@ -1,0 +1,116 @@
+name: reorder-watcher
+description: Decides whether a low-stock product needs reordering and drafts the purchase order.
+
+model:
+  provider: anthropic
+  name: claude-opus-5-5
+  effort: medium
+  fallbacks: default
+
+instructions: |
+  You manage replenishment for an online shop. Each run gives you the SKU of a
+  product whose stock is running low.
+
+  Fetch its stock position and apply the shop's policy exactly:
+
+  1. available = on hand + on order
+  2. reorder point = daily sales x lead time in days
+  3. If available is greater than the reorder point, stock is sufficient. Do
+     not order.
+  4. Otherwise, need = daily sales x (lead time + cover days) - available.
+     Round need up to a whole number of packs. The order quantity is that
+     number of packs times the pack size.
+
+  Work the arithmetic through step by step before you act.
+
+  If an order is needed, create the purchase order for exactly that quantity.
+  A person approves every purchase order before it is placed. If they reject
+  it, do not try again; submit your result as you calculated it.
+
+  Submit reorder (true or false) and quantity (0 when no order is needed).
+
+prompt: "Stock for {{.sku}} is running low. Decide whether to reorder."
+
+triggers:
+  - event: inventory.low_stock
+
+tools:
+  - name: get_inventory
+    description: Fetch the stock position and replenishment settings of a SKU.
+    input_schema:
+      type: object
+      properties:
+        sku: {type: string}
+      required: [sku]
+      additionalProperties: false
+    graphql:
+      endpoint: ${SHOP_GRAPHQL_URL}
+      headers: {Authorization: "Bearer ${SHOP_API_TOKEN}"}
+      query: |
+        query($sku: ID!) {
+          inventory(sku: $sku) {
+            sku onHand onOrder dailySales leadTimeDays coverDays packSize unitCostCents
+          }
+        }
+
+  - name: create_purchase_order
+    description: Order stock from the supplier. Needs a person's approval before it is placed.
+    requires_approval: true
+    input_schema:
+      type: object
+      properties:
+        sku: {type: string}
+        quantity: {type: integer, minimum: 1}
+        note: {type: string, description: "The calculation behind the quantity, for the approver"}
+      required: [sku, quantity, note]
+      additionalProperties: false
+    graphql:
+      endpoint: ${SHOP_GRAPHQL_URL}
+      headers: {Authorization: "Bearer ${SHOP_API_TOKEN}"}
+      query: |
+        mutation($sku: ID!, $quantity: Int!, $note: String) {
+          createPurchaseOrder(sku: $sku, quantity: $quantity, note: $note) { id sku quantity }
+        }
+
+output:
+  schema:
+    type: object
+    properties:
+      reorder: {type: boolean}
+      quantity: {type: integer, minimum: 0}
+      reasoning: {type: string, description: "The numbers you used"}
+    required: [reorder, quantity, reasoning]
+    additionalProperties: false
+
+limits:
+  max_steps: 6
+  max_cost_usd: 0.30
+  timeout: 3m
+
+kpis:
+  - name: right_decision
+    grader: expected
+    params: {fields: [reorder]}
+    target: ">= 0.97"
+  - name: right_quantity
+    grader: expected
+    params: {fields: [quantity]}
+    target: ">= 0.95"
+  # How often the approver agrees with the agent. A falling rate means people
+  # are doing the agent's job for it.
+  - name: approval_rate
+    grader: approvals
+    target: ">= 0.9"
+  - name: cost_per_decision
+    grader: cost
+    target: "<= 0.05"
+
+review:
+  window: 60
+  min_runs: 15
+  on_breach: pause
+
+shadow:
+  - provider: xai
+    name: grok-4.7
+    sample_rate: 0.5
