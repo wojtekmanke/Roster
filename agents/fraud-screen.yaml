@@ -1,0 +1,118 @@
+name: fraud-screen
+description: Screens new orders for fraud signals and holds the risky ones for review.
+
+model:
+  provider: anthropic
+  name: claude-opus-5-5
+  effort: low
+  fallbacks: default
+
+instructions: |
+  You screen new orders for an online shop. Each run gives you one order ID.
+
+  Fetch the order with its customer and count how many of these signals are
+  present:
+
+  - country_mismatch: the billing country differs from the shipping country,
+    or the IP country differs from the billing country.
+  - payment_retries: the payment took 3 or more attempts.
+  - new_account_high_value: the account is less than 2 days old and the order
+    total is over 30000 cents.
+  - disposable_email: the customer's email is at a disposable-address provider
+    such as mailinator.com, tempmail.dev, 10minutemail.com or guerrillamail.com.
+  - prior_chargebacks: the customer has 1 or more chargebacks.
+
+  Flag the order only when two or more signals are present. One signal alone
+  is not enough: most such orders are honest, and holding them costs sales.
+
+  If you flag the order, put it on hold with the signals as the reason. Then
+  submit flag (true or false) and the list of signals you found.
+
+prompt: "Screen order {{.order_id}}."
+
+triggers:
+  - event: order.placed
+
+tools:
+  - name: get_order
+    description: Fetch an order with the customer who placed it.
+    input_schema:
+      type: object
+      properties:
+        id: {type: string}
+      required: [id]
+      additionalProperties: false
+    graphql:
+      endpoint: ${SHOP_GRAPHQL_URL}
+      headers: {Authorization: "Bearer ${SHOP_API_TOKEN}"}
+      query: |
+        query($id: ID!) {
+          order(id: $id) {
+            id status items totalCents
+            billingCountry shippingCountry ipCountry paymentAttempts
+            customer { id email accountAgeDays createdAt ordersCount chargebacks }
+          }
+        }
+
+  - name: hold_order
+    description: Stop the order from shipping until a person reviews it.
+    side_effect: true
+    input_schema:
+      type: object
+      properties:
+        id: {type: string}
+        reason: {type: string}
+      required: [id, reason]
+      additionalProperties: false
+    graphql:
+      endpoint: ${SHOP_GRAPHQL_URL}
+      headers: {Authorization: "Bearer ${SHOP_API_TOKEN}"}
+      query: |
+        mutation($id: ID!, $reason: String!) {
+          holdOrder(id: $id, reason: $reason) { id status }
+        }
+
+output:
+  schema:
+    type: object
+    properties:
+      flag: {type: boolean}
+      signals:
+        type: array
+        items:
+          type: string
+          enum: [country_mismatch, payment_retries, new_account_high_value, disposable_email, prior_chargebacks]
+    required: [flag, signals]
+    additionalProperties: false
+
+limits:
+  max_steps: 5
+  max_cost_usd: 0.20
+  timeout: 2m
+
+kpis:
+  # Of the orders it held, how many deserved it. Low precision costs sales.
+  - name: precision
+    grader: classification
+    metric: precision
+    params: {field: flag}
+    target: ">= 0.9"
+  # Of the fraudulent orders, how many it caught. Low recall costs chargebacks.
+  - name: recall
+    grader: classification
+    metric: recall
+    params: {field: flag}
+    target: ">= 0.95"
+  - name: cost_per_order
+    grader: cost
+    target: "<= 0.02"
+
+review:
+  window: 200
+  min_runs: 15
+  on_breach: pause
+
+shadow:
+  - provider: openai
+    name: gpt-6.1-sol
+    sample_rate: 0.25
