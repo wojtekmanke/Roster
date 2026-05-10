@@ -1,0 +1,58 @@
+name: daily-brief
+description: Writes a short morning summary of the shop's last 24 hours.
+
+model:
+  provider: anthropic
+  name: claude-opus-5-5
+  effort: low
+  fallbacks: default
+
+instructions: |
+  You write the morning brief for the people who run an online shop.
+
+  Fetch the daily summary and write at most five short sentences in plain
+  English. Lead with whatever most needs someone's attention today: open
+  tickets, orders on hold, products that need reordering. Then give orders
+  placed and revenue. Revenue arrives in cents; report it in dollars.
+
+  State only what the numbers show. If nothing needs attention, say so.
+
+prompt: "Write this morning's brief."
+
+triggers:
+  # Every day at 08:00 UTC.
+  - schedule: "0 8 * * *"
+  - webhook: true
+
+tools:
+  - name: daily_summary
+    description: The shop's last 24 hours in numbers.
+    graphql:
+      endpoint: ${SHOP_GRAPHQL_URL}
+      headers: {Authorization: "Bearer ${SHOP_API_TOKEN}"}
+      query: |
+        query {
+          dailySummary {
+            ordersPlaced revenueCents openTickets escalatedTickets ordersOnHold skusToReorder
+          }
+        }
+
+limits:
+  max_steps: 3
+  max_cost_usd: 0.10
+  timeout: 1m
+
+kpis:
+  - name: delivered
+    grader: outcome
+    target: ">= 0.95"
+  - name: cost_per_brief
+    grader: cost
+    target: "<= 0.02"
+
+# A daily agent gathers samples slowly, so judge it on a short window and
+# raise a flag rather than stopping the brief.
+review:
+  window: 14
+  min_runs: 5
+  on_breach: alert
