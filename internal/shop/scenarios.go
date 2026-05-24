@@ -444,3 +444,34 @@ func (g *generator) order(ctx context.Context) (Scenario, error) {
 		map[string]any{"order_id": placed.ID},
 		map[string]any{"flag": count >= 2}), nil
 }
+
+// TitleAttributes is the answer key for generated product titles: the
+// category, colour and material that a title such as "Merino Beanie -
+// Charcoal" implies. It reports false for titles the generator did not make.
+func TitleAttributes(title string) (category, color, material string, ok bool) {
+	head, colorWord, found := strings.Cut(title, " - ")
+	if !found {
+		return "", "", "", false
+	}
+	for name, words := range colorWords {
+		for _, w := range words {
+			if w == colorWord {
+				color = name
+			}
+		}
+	}
+	for _, pt := range productTypes {
+		materialWord, isType := strings.CutSuffix(head, " "+pt.noun)
+		if !isType {
+			continue
+		}
+		for _, m := range pt.materials {
+			for _, w := range materialWords[m] {
+				if w == materialWord {
+					return pt.category, color, m, color != ""
+				}
+			}
+		}
+	}
+	return "", "", "", false
+}
