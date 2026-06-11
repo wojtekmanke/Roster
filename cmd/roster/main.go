@@ -2,18 +2,20 @@
 package main
 
 import (
-	"fmt"
+	"context"
 	"os"
+
+	"github.com/wojtekmanke/roster/internal/cli"
 )
 
 // version is overridden at build time with -ldflags "-X main.version=...".
 var version = "dev"
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "version" {
-		fmt.Println(version)
-		return
-	}
-	fmt.Fprintln(os.Stderr, "usage: roster <command>")
-	os.Exit(2)
+	os.Exit(cli.Run(context.Background(), cli.Env{
+		Args:    os.Args[1:],
+		Stdout:  os.Stdout,
+		Stderr:  os.Stderr,
+		Version: version,
+	}))
 }
