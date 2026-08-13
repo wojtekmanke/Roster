@@ -1,3 +1,8 @@
+# `docker compose up --build` starts Postgres and Roster with the demo store
+# mounted. The dashboard is at http://localhost:8080.
+#
+# Set provider keys in your shell or a .env file to run agents on real
+# models. Without any, use the scripted demo models (see the README).
 services:
   postgres:
     image: postgres:17
@@ -6,7 +11,7 @@ services:
       POSTGRES_PASSWORD: roster
       POSTGRES_DB: roster
     ports:
-      - "54329:5432"
+      - "${ROSTER_PG_PORT:-54329}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -14,6 +19,23 @@ services:
       interval: 2s
       timeout: 2s
       retries: 20
+
+  roster:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://roster:roster@postgres:5432/roster?sslmode=disable
+      ROSTER_DEMO_SHOP: "true"
+      ROSTER_API_TOKEN: ${ROSTER_API_TOKEN:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      XAI_API_KEY: ${XAI_API_KEY:-}
+      # Ollama running on the host machine.
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}
+    ports:
+      - "${ROSTER_PORT:-8080}:8080"
 
 volumes:
   pgdata:
