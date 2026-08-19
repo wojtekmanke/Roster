@@ -343,6 +343,40 @@ func TestQueue(t *testing.T) {
 	}
 }
 
+func TestRunAtSetsQueuePosition(t *testing.T) {
+	s := storetest.New(t)
+	ctx := context.Background()
+	a := mustApply(t, s, "worker")
+
+	for _, trigger := range []string{"first", "second", "third"} {
+		if _, err := s.Enqueue(ctx, store.NewJob{AgentID: a.ID, Kind: store.JobRun, Trigger: trigger}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first, err := s.Dequeue(ctx, "w")
+	if err != nil || first.Trigger != "first" {
+		t.Fatalf("first = %+v, %v", first, err)
+	}
+	// A job queued now, but with the first job's place, runs before the backlog.
+	if _, err := s.Enqueue(ctx, store.NewJob{AgentID: a.ID, Kind: store.JobRun, Trigger: "shadow of first", RunAt: first.RunAt}); err != nil {
+		t.Fatal(err)
+	}
+	var order []string
+	for {
+		job, err := s.Dequeue(ctx, "w")
+		if errors.Is(err, store.ErrNotFound) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		order = append(order, job.Trigger)
+	}
+	if got := strings.Join(order, ", "); got != "shadow of first, second, third" {
+		t.Fatalf("order = %s", got)
+	}
+}
+
 func TestDequeueNeverHandsOutAJobTwice(t *testing.T) {
 	s := storetest.New(t)
 	ctx := context.Background()

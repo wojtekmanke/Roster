@@ -67,7 +67,7 @@ func (s *Service) handle(ctx context.Context, job *store.Job) error {
 		if err := s.Store.AttachRun(ctx, job.ID, run.ID); err != nil {
 			return err
 		}
-		if err := s.queueShadows(ctx, a, sp, run); err != nil {
+		if err := s.queueShadows(ctx, a, sp, job, run); err != nil {
 			return err
 		}
 		return s.execute(ctx, sp, run, sp.Model, nil, nil)
@@ -136,7 +136,12 @@ func (s *Service) handle(ctx context.Context, job *store.Job) error {
 
 // queueShadows queues a replay of the run on each shadow model, sampled at
 // the configured rate.
-func (s *Service) queueShadows(ctx context.Context, a *store.Agent, sp *spec.Spec, run *store.Run) error {
+//
+// A shadow takes its primary's place in the queue rather than joining the
+// back. Behind a backlog, shadows would otherwise trail their primaries by
+// the whole backlog, and a model comparison would be comparing different
+// stretches of work.
+func (s *Service) queueShadows(ctx context.Context, a *store.Agent, sp *spec.Spec, job *store.Job, run *store.Run) error {
 	for i, shadow := range sp.Shadow {
 		if s.random() >= shadow.SampleRate {
 			continue
@@ -144,6 +149,7 @@ func (s *Service) queueShadows(ctx context.Context, a *store.Agent, sp *spec.Spe
 		index := i
 		if _, err := s.Store.Enqueue(ctx, store.NewJob{
 			AgentID: a.ID, Kind: store.JobShadow, RunID: &run.ID, Trigger: run.Trigger, ShadowIndex: &index,
+			RunAt: job.RunAt,
 		}); err != nil {
 			return err
 		}

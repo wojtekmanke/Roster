@@ -44,6 +44,8 @@ type NewJob struct {
 	ShadowIndex *int
 	// DedupeKey, when set, makes a second enqueue with the same key a no-op.
 	DedupeKey string
+	// RunAt is the job's place in the queue. Zero means now, the back of it.
+	RunAt time.Time
 }
 
 // Enqueue adds a job. It returns false, with no error, when a job with the
@@ -53,11 +55,15 @@ func (s *Store) Enqueue(ctx context.Context, n NewJob) (bool, error) {
 	if n.DedupeKey != "" {
 		dedupe = &n.DedupeKey
 	}
+	var runAt *time.Time
+	if !n.RunAt.IsZero() {
+		runAt = &n.RunAt
+	}
 	tag, err := s.Pool.Exec(ctx, `
-		insert into jobs (agent_id, kind, run_id, trigger, input, expected, shadow_index, dedupe_key)
-		values ($1, $2, $3, $4, $5, $6, $7, $8)
+		insert into jobs (agent_id, kind, run_id, trigger, input, expected, shadow_index, dedupe_key, run_at)
+		values ($1, $2, $3, $4, $5, $6, $7, $8, coalesce($9, now()))
 		on conflict (dedupe_key) do nothing`,
-		n.AgentID, n.Kind, n.RunID, n.Trigger, jsonArg(n.Input), jsonArg(n.Expected), n.ShadowIndex, dedupe)
+		n.AgentID, n.Kind, n.RunID, n.Trigger, jsonArg(n.Input), jsonArg(n.Expected), n.ShadowIndex, dedupe, runAt)
 	if err != nil {
 		return false, err
 	}
