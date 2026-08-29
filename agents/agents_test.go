@@ -3,17 +3,15 @@ package agents_test
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http/httptest"
-	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/wojtekmanke/roster/agents"
 	"github.com/wojtekmanke/roster/internal/agent"
+	"github.com/wojtekmanke/roster/internal/demo"
 	"github.com/wojtekmanke/roster/internal/fleet"
 	"github.com/wojtekmanke/roster/internal/llm"
-	"github.com/wojtekmanke/roster/internal/llm/llmtest"
 	"github.com/wojtekmanke/roster/internal/pricing"
 	"github.com/wojtekmanke/roster/internal/scoring"
 	"github.com/wojtekmanke/roster/internal/shop"
@@ -51,220 +49,39 @@ func TestExamplesAreValid(t *testing.T) {
 	}
 }
 
-// The tests below run the example agents end to end against the demo store,
-// with the models replaced by two scripted stand-ins: an oracle that follows
-// each agent's instructions exactly, and a careless model that answers
-// without looking. Everything else is real: the specs, the GraphQL tools, the
-// store's API, the queue, approvals, grading and the scorecards.
-
-var idPattern = regexp.MustCompile(`(T|O|SKU)-\d+`)
-
-// conversation summarises where a scripted model is in its work.
-type conversation struct {
-	subject string            // the ID named in the first message
-	results map[string]string // tool name -> its latest result
-	offered map[string]bool   // tools on offer
+// as answers every request with one of the scripted demo models, whatever
+// model the spec asked for.
+func as(model string) llm.Provider {
+	return providerFunc(func(ctx context.Context, req *llm.Request) (*llm.Response, error) {
+		scripted := *req
+		scripted.Model.Name = model
+		return demo.Provider{}.Complete(ctx, &scripted)
+	})
 }
 
-func read(req *llm.Request) conversation {
-	c := conversation{results: map[string]string{}, offered: map[string]bool{}}
-	c.subject = idPattern.FindString(req.Messages[0].Text())
-	for _, def := range req.Tools {
-		c.offered[def.Name] = true
-	}
-	names := map[string]string{}
-	for _, m := range req.Messages {
-		for _, b := range m.Content {
-			switch b.Type {
-			case llm.BlockToolUse:
-				names[b.ToolUseID] = b.ToolName
-			case llm.BlockToolResult:
-				c.results[names[b.ToolUseID]] = b.Text
-			}
-		}
-	}
-	return c
+type providerFunc func(context.Context, *llm.Request) (*llm.Response, error)
+
+func (f providerFunc) Complete(ctx context.Context, req *llm.Request) (*llm.Response, error) {
+	return f(ctx, req)
 }
 
-func call(name string, input map[string]any) (*llm.Response, error) {
-	return llmtest.Call(name, input), nil
-}
-
-// oracle plays every example agent correctly, and the judge generously.
-func oracle(t *testing.T) func(*llm.Request) (*llm.Response, error) {
-	return func(req *llm.Request) (*llm.Response, error) {
-		c := read(req)
-		switch {
-		case c.offered["grade"]:
-			return call("grade", map[string]any{"score": 5, "reasoning": "Clear and accurate."})
-
-		case c.offered["get_ticket"]:
-			raw, fetched := c.results["get_ticket"]
-			if !fetched {
-				return call("get_ticket", map[string]any{"id": c.subject})
-			}
-			var data struct {
-				Ticket struct {
-					Subject string
-					Order   *struct{ ID, Status string }
-				}
-			}
-			mustDecode(t, raw, &data)
-			asksWhere := data.Ticket.Subject == "Order status" || data.Ticket.Subject == "Where is my order?"
-			order := data.Ticket.Order
-			if asksWhere && order != nil && (order.Status == "processing" || order.Status == "shipped") {
-				if _, done := c.results["reply_to_ticket"]; !done {
-					return call("reply_to_ticket", map[string]any{"id": c.subject, "body": "Your order is " + order.Status + "."})
-				}
-				return call(spec.SubmitTool, map[string]any{"action": "reply", "order_status": order.Status, "summary": "Answered a status question."})
-			}
-			if _, done := c.results["escalate_ticket"]; !done {
-				return call("escalate_ticket", map[string]any{"id": c.subject, "reason": "Not a status question we can answer."})
-			}
-			return call(spec.SubmitTool, map[string]any{"action": "escalate", "summary": "Escalated."})
-
-		case c.offered["get_product"]:
-			raw, fetched := c.results["get_product"]
-			if !fetched {
-				return call("get_product", map[string]any{"sku": c.subject})
-			}
-			var data struct{ Product struct{ Title string } }
-			mustDecode(t, raw, &data)
-			category, color, material, ok := shop.TitleAttributes(data.Product.Title)
-			if !ok {
-				return nil, fmt.Errorf("oracle cannot read the title %q", data.Product.Title)
-			}
-			fields := map[string]any{"category": category, "color": color, "material": material,
-				"description": fmt.Sprintf("A %s %s item made of %s.", color, category, material)}
-			if _, done := c.results["update_product"]; !done {
-				fields["sku"] = c.subject
-				return call("update_product", fields)
-			}
-			return call(spec.SubmitTool, fields)
-
-		case c.offered["get_inventory"]:
-			raw, fetched := c.results["get_inventory"]
-			if !fetched {
-				return call("get_inventory", map[string]any{"sku": c.subject})
-			}
-			var data struct {
-				Inventory struct {
-					OnHand, OnOrder, LeadTimeDays, CoverDays, PackSize int
-					DailySales                                         float64
-				}
-			}
-			mustDecode(t, raw, &data)
-			i := data.Inventory
-			inv := shop.Inventory{OnHand: i.OnHand, OnOrder: i.OnOrder, DailySales: i.DailySales, LeadTimeDays: i.LeadTimeDays, CoverDays: i.CoverDays, PackSize: i.PackSize}
-			quantity := inv.ReorderQuantity()
-			if _, done := c.results["create_purchase_order"]; quantity > 0 && !done {
-				return call("create_purchase_order", map[string]any{"sku": c.subject, "quantity": quantity, "note": "Per policy."})
-			}
-			return call(spec.SubmitTool, map[string]any{"reorder": quantity > 0, "quantity": quantity, "reasoning": "Per policy."})
-
-		case c.offered["get_order"]:
-			raw, fetched := c.results["get_order"]
-			if !fetched {
-				return call("get_order", map[string]any{"id": c.subject})
-			}
-			var data struct {
-				Order struct {
-					TotalCents, PaymentAttempts                int
-					BillingCountry, ShippingCountry, IPCountry string
-					Customer                                   struct {
-						Email                       string
-						AccountAgeDays, Chargebacks int
-					}
-				}
-			}
-			mustDecode(t, raw, &data)
-			o := data.Order
-			signals := []string{}
-			if o.BillingCountry != o.ShippingCountry || o.IPCountry != o.BillingCountry {
-				signals = append(signals, "country_mismatch")
-			}
-			if o.PaymentAttempts >= 3 {
-				signals = append(signals, "payment_retries")
-			}
-			if o.Customer.AccountAgeDays < 2 && o.TotalCents > 30000 {
-				signals = append(signals, "new_account_high_value")
-			}
-			for _, d := range []string{"mailinator.com", "tempmail.dev", "10minutemail.com", "guerrillamail.com"} {
-				if strings.HasSuffix(o.Customer.Email, "@"+d) {
-					signals = append(signals, "disposable_email")
-				}
-			}
-			if o.Customer.Chargebacks >= 1 {
-				signals = append(signals, "prior_chargebacks")
-			}
-			flag := len(signals) >= 2
-			if _, done := c.results["hold_order"]; flag && !done {
-				return call("hold_order", map[string]any{"id": c.subject, "reason": strings.Join(signals, ", ")})
-			}
-			return call(spec.SubmitTool, map[string]any{"flag": flag, "signals": signals})
-
-		case c.offered["daily_summary"]:
-			if raw, fetched := c.results["daily_summary"]; fetched {
-				return llmtest.Say("Summary: " + raw), nil
-			}
-			return call("daily_summary", map[string]any{})
-		}
-		return nil, fmt.Errorf("oracle does not know this agent (tools: %v)", c.offered)
-	}
-}
-
-// careless answers at once without looking anything up. It also tries the
-// side effects, which a shadow run must not carry out.
-func careless(req *llm.Request) (*llm.Response, error) {
-	c := read(req)
-	acted := len(req.Messages) > 1
-	switch {
-	case c.offered["get_ticket"]:
-		if !acted {
-			return call("reply_to_ticket", map[string]any{"id": c.subject, "body": "It is on its way!"})
-		}
-		return call(spec.SubmitTool, map[string]any{"action": "reply", "order_status": "shipped", "summary": "Replied."})
-	case c.offered["get_product"]:
-		fields := map[string]any{"category": "apparel", "color": "black", "material": "cotton", "description": "Nice."}
-		if !acted {
-			fields["sku"] = c.subject
-			return call("update_product", fields)
-		}
-		return call(spec.SubmitTool, fields)
-	case c.offered["get_inventory"]:
-		if !acted {
-			return call("create_purchase_order", map[string]any{"sku": c.subject, "quantity": 1000, "note": "Just in case."})
-		}
-		return call(spec.SubmitTool, map[string]any{"reorder": true, "quantity": 1000, "reasoning": "Just in case."})
-	case c.offered["get_order"]:
-		if !acted {
-			return call("hold_order", map[string]any{"id": c.subject, "reason": "Looks odd."})
-		}
-		return call(spec.SubmitTool, map[string]any{"flag": true, "signals": []string{}})
-	}
-	return nil, fmt.Errorf("careless model does not know this agent")
-}
-
-func mustDecode(t *testing.T, raw string, into any) {
-	t.Helper()
-	if err := json.Unmarshal([]byte(raw), into); err != nil {
-		t.Errorf("tool result is not the JSON the agent expects: %v\n%s", err, raw)
-	}
-}
-
+// TestExampleAgentsEndToEnd runs the example agents against the demo store
+// with the models replaced by two scripted stand-ins: one that follows each
+// agent's instructions exactly, and a careless one that answers without
+// looking. Everything else is real: the specs, the GraphQL tools, the store's
+// API, the queue, approvals, grading and the scorecards.
 func TestExampleAgentsEndToEnd(t *testing.T) {
 	ctx := context.Background()
 	db := storetest.New(t)
-	demo := &shop.Shop{Pool: db.Pool}
+	demoShop := &shop.Shop{Pool: db.Pool}
 
-	shopAPI := httptest.NewServer(shopgraph.NewHandler(demo, "shop-token"))
+	shopAPI := httptest.NewServer(shopgraph.NewHandler(demoShop, "shop-token"))
 	defer shopAPI.Close()
 	env := map[string]string{"SHOP_GRAPHQL_URL": shopAPI.URL, "SHOP_API_TOKEN": "shop-token"}
 
-	good := llmtest.NewScripted()
-	good.Func = oracle(t)
-	bad := llmtest.NewScripted()
-	bad.Func = careless
+	// The scripted demo models stand in for the providers the specs name.
+	good := as(demo.Careful)
+	bad := as(demo.Careless)
 	providers := llm.Registry{"anthropic": good, "xai": bad, "openai": bad, "ollama": bad}
 
 	graders := scoring.Builtin()
@@ -288,7 +105,7 @@ func TestExampleAgentsEndToEnd(t *testing.T) {
 	}
 
 	const each = 12
-	scenarios, err := demo.Generate(ctx, 2026, shop.Counts{Tickets: each, Products: each, Restocks: each, Orders: each})
+	scenarios, err := demoShop.Generate(ctx, 2026, shop.Counts{Tickets: each, Products: each, Restocks: each, Orders: each})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/wojtekmanke/roster/internal/agent"
+	"github.com/wojtekmanke/roster/internal/demo"
 	"github.com/wojtekmanke/roster/internal/fleet"
 	"github.com/wojtekmanke/roster/internal/llm"
 	"github.com/wojtekmanke/roster/internal/llm/anthropic"
@@ -30,7 +31,9 @@ Usage:
   roster agents validate FILE...     Check agent specs without storing them
   roster agents apply FILE...        Create or update agents from spec files
   roster agents apply --examples     Create or update the bundled example agents
+                      --demo         ...on scripted stand-in models, no API key needed
   roster shop simulate [flags]       Generate demo-store scenarios and emit their events
+  roster work [--approve]            Execute queued runs until the queue is empty, then exit
   roster report                      Print every agent's scorecard as Markdown
   roster version
 
@@ -79,6 +82,8 @@ func Run(ctx context.Context, env Env) int {
 		err = agentsCmd(ctx, env, args)
 	case "shop":
 		err = shopCmd(ctx, env, args)
+	case "work":
+		err = work(ctx, env, args)
 	case "report":
 		err = report(ctx, env)
 	case "version":
@@ -125,6 +130,8 @@ func (e Env) providers() llm.Registry {
 	reg := llm.Registry{
 		anthropic.Name:      anthropic.New(),
 		openaicompat.Ollama: openaicompat.NewOllama(e.Getenv("OLLAMA_BASE_URL")),
+		// Scripted stand-ins, used only by specs applied with --demo.
+		demo.Name: demo.Provider{},
 	}
 	if e.Getenv("OPENAI_API_KEY") != "" {
 		reg[openaicompat.OpenAI] = openaicompat.NewOpenAI()

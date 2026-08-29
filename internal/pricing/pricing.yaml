@@ -28,3 +28,8 @@ xai:
 # Self-hosted models cost compute, not tokens.
 ollama:
   "*": {input: 0, output: 0}
+
+# The scripted demo models are not models. A nominal price gives the cost
+# columns something to show.
+demo:
+  "*": {input: 1.00, output: 5.00}

@@ -230,3 +230,69 @@ func TestServe(t *testing.T) {
 		t.Errorf("log is missing start or stop lines:\n%s", stderr.String())
 	}
 }
+
+// TestDemoWithoutAnyKeys is the path the README offers a first-time visitor:
+// scripted models, generated scenarios, the queue worked to completion.
+func TestDemoWithoutAnyKeys(t *testing.T) {
+	_, url := storetest.NewWithURL(t)
+	env := map[string]string{"DATABASE_URL": url, "ROSTER_DEMO_SHOP": "true"}
+	// No Providers override: this exercises the registry the binary builds.
+	demoRun := func(args ...string) (int, string, string) {
+		t.Helper()
+		var stdout, stderr bytes.Buffer
+		code := cli.Run(context.Background(), cli.Env{
+			Args: args, Stdout: &stdout, Stderr: &stderr,
+			Getenv: func(k string) string { return env[k] },
+		})
+		return code, stdout.String(), stderr.String()
+	}
+
+	code, stdout, stderr := demoRun("agents", "apply", "--examples", "--demo")
+	if code != 0 || strings.Count(stdout, "(demo/scripted-careful)") != 4 || !strings.Contains(stdout, "fraud-screen (demo/scripted-careless)") {
+		t.Fatalf("apply --demo: code %d, stdout %q, stderr %q", code, stdout, stderr)
+	}
+	if code, stdout, stderr = demoRun("shop", "simulate", "--tickets", "6", "--products", "6", "--restocks", "6", "--orders", "40", "--seed", "5"); code != 0 {
+		t.Fatalf("simulate: code %d, stdout %q, stderr %q", code, stdout, stderr)
+	}
+	code, stdout, stderr = demoRun("work", "--approve")
+	if code != 0 || !strings.Contains(stdout, "executed ") {
+		t.Fatalf("work: code %d, stdout %q, stderr %q", code, stdout, stderr)
+	}
+
+	code, report, stderr := demoRun("report")
+	if code != 0 {
+		t.Fatalf("report: code %d, stderr %q", code, stderr)
+	}
+	section := func(name string) string {
+		t.Helper()
+		_, rest, found := strings.Cut(report, "## "+name+"\n")
+		if !found {
+			t.Fatalf("report has no section for %s:\n%s", name, report)
+		}
+		body, _, _ := strings.Cut(rest, "\n## ")
+		return body
+	}
+
+	// The careful model does the work properly and stays employed.
+	triage := section("support-triage")
+	if !strings.Contains(triage, "Status: active") || !strings.Contains(triage, "| demo/scripted-careful | primary | 6 | 6 |") {
+		t.Errorf("support-triage:\n%s", triage)
+	}
+	if !strings.Contains(triage, "| demo/scripted-careless | shadow | 6 |") {
+		t.Errorf("support-triage has no shadow row:\n%s", triage)
+	}
+
+	// The careless model flags every order, misses its precision target once
+	// enough runs are in, and is paused with the reason on record.
+	fraud := section("fraud-screen")
+	if !strings.Contains(fraud, "Status: paused: precision is ") || !strings.Contains(fraud, "MISSED") {
+		t.Errorf("fraud-screen was not paused for missing precision:\n%s", fraud)
+	}
+	if !strings.Contains(fraud, "| demo/scripted-careful | shadow |") {
+		t.Errorf("fraud-screen has no careful shadow to compare with:\n%s", fraud)
+	}
+	// Paused means paused: the orders it had not reached are still queued.
+	if !strings.Contains(fraud, "| demo/scripted-careless | primary | 15 |") {
+		t.Errorf("fraud-screen should have stopped at its 15th run (min_runs):\n%s", fraud)
+	}
+}

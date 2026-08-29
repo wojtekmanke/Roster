@@ -17,12 +17,14 @@ import (
 	"time"
 
 	"github.com/wojtekmanke/roster/agents"
+	"github.com/wojtekmanke/roster/internal/demo"
 	"github.com/wojtekmanke/roster/internal/fleet"
 	"github.com/wojtekmanke/roster/internal/scoring"
 	"github.com/wojtekmanke/roster/internal/server"
 	"github.com/wojtekmanke/roster/internal/shop"
 	shopgraph "github.com/wojtekmanke/roster/internal/shop/graph"
 	"github.com/wojtekmanke/roster/internal/spec"
+	"github.com/wojtekmanke/roster/internal/store"
 )
 
 // shutdownGrace is how long serve waits for runs in flight when asked to
@@ -53,18 +55,7 @@ func serve(ctx context.Context, env Env) error {
 	// example agents can find it without any configuration.
 	getenv := env.Getenv
 	if demoShop {
-		getenv = func(key string) string {
-			if v := env.Getenv(key); v != "" {
-				return v
-			}
-			switch key {
-			case "SHOP_GRAPHQL_URL":
-				return "http://127.0.0.1:" + port + "/shop/graphql"
-			case "SHOP_API_TOKEN":
-				return "demo"
-			}
-			return ""
-		}
+		getenv = withShopDefaults(env.Getenv, "http://127.0.0.1:"+port+"/shop/graphql")
 	}
 	svc, err := env.service(db, getenv)
 	if err != nil {
@@ -136,6 +127,93 @@ func serve(ctx context.Context, env Env) error {
 	return nil
 }
 
+// withShopDefaults points the example agents' tools at a demo store API when
+// the environment does not say where one is.
+func withShopDefaults(getenv func(string) string, url string) func(string) string {
+	return func(key string) string {
+		if v := getenv(key); v != "" {
+			return v
+		}
+		switch key {
+		case "SHOP_GRAPHQL_URL":
+			return url
+		case "SHOP_API_TOKEN":
+			return "demo"
+		}
+		return ""
+	}
+}
+
+// work executes queued runs in this process until nothing is left, then
+// exits. With --approve it also approves every approval request it meets,
+// which is how a demo gets through runs that would otherwise wait for a
+// person.
+func work(ctx context.Context, env Env, args []string) error {
+	fs := flag.NewFlagSet("roster work", flag.ContinueOnError)
+	fs.SetOutput(env.Stderr)
+	approve := fs.Bool("approve", false, "approve every pending approval (for demos)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	db, err := env.openStore(ctx)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	// Serve the demo store's API on a private port for the tools to call.
+	getenv := env.Getenv
+	if env.Getenv("ROSTER_DEMO_SHOP") == "true" && env.Getenv("SHOP_GRAPHQL_URL") == "" {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return err
+		}
+		getenv = withShopDefaults(env.Getenv, "http://"+listener.Addr().String())
+		shopServer := &http.Server{
+			Handler:           shopgraph.NewHandler(&shop.Shop{Pool: db.Pool}, getenv("SHOP_API_TOKEN")),
+			ReadHeaderTimeout: 10 * time.Second,
+		}
+		go shopServer.Serve(listener)
+		defer shopServer.Close()
+	}
+	svc, err := env.service(db, getenv)
+	if err != nil {
+		return err
+	}
+
+	worked, approved := 0, 0
+	for {
+		n, err := svc.Drain(ctx, "cli", 0)
+		if err != nil {
+			return err
+		}
+		worked += n
+		decided := 0
+		if *approve {
+			pending, err := db.Approvals(ctx, store.ApprovalFilter{Status: store.ApprovalPending, Limit: 500})
+			if err != nil {
+				return err
+			}
+			for _, ap := range pending {
+				if _, err := svc.Decide(ctx, ap.ID, true, "cli", "approved by `roster work --approve`"); err != nil {
+					return err
+				}
+				decided++
+			}
+		}
+		approved += decided
+		if n == 0 && decided == 0 {
+			break
+		}
+	}
+	// Grade anything a failed job left ungraded.
+	if err := svc.Tick(ctx); err != nil {
+		return err
+	}
+	fmt.Fprintf(env.Stdout, "executed %d jobs, approved %d requests\n", worked, approved)
+	return nil
+}
+
 func agentsCmd(ctx context.Context, env Env, args []string) error {
 	if len(args) == 0 {
 		return errors.New("usage: roster agents validate|apply FILE...")
@@ -164,12 +242,24 @@ func agentsCmd(ctx context.Context, env Env, args []string) error {
 		fs := flag.NewFlagSet("roster agents apply", flag.ContinueOnError)
 		fs.SetOutput(env.Stderr)
 		examples := fs.Bool("examples", false, "apply the bundled example agents")
+		demoModels := fs.Bool("demo", false, "run on scripted stand-in models instead of real ones (bundled examples only)")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
 		files, err := readSpecs(fs.Args(), *examples)
 		if err != nil {
 			return err
+		}
+		if *demoModels {
+			for i, f := range files {
+				// One agent gets the careless model as its own, so the demo
+				// includes an agent that misses its targets and is paused
+				// while its shadow does the job properly.
+				careless := strings.Contains(f.name, "fraud-screen")
+				if files[i].data, err = demo.Rewrite(f.data, careless); err != nil {
+					return fmt.Errorf("%s: %w", f.name, err)
+				}
+			}
 		}
 		db, err := env.openStore(ctx)
 		if err != nil {
