@@ -37,6 +37,9 @@ const maxListLimit = 200
 func NewHandler(svc *fleet.Service, log *slog.Logger) http.Handler {
 	srv := handler.New(NewExecutableSchema(Config{Resolvers: &Resolver{Svc: svc}}))
 	srv.AddTransport(transport.Options{})
+	// GET is accepted for queries because common clients send short queries
+	// that way by default. Mutations over GET are refused by the transport.
+	srv.AddTransport(transport.GET{})
 	srv.AddTransport(transport.POST{})
 	srv.Use(extension.Introspection{})
 

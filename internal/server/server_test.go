@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -278,6 +279,28 @@ func TestGraphQLFleetLifecycle(t *testing.T) {
 	}
 	if _, errs := a.gqlRaw(`mutation { pauseAgent(name: "nope", reason: "x") { id } }`, nil); len(errs) != 1 || !strings.Contains(errs[0], `no agent named "nope"`) {
 		t.Errorf("pause unknown agent errors = %v", errs)
+	}
+}
+
+// TestGraphQLOverGET covers the request shape browsers' GraphQL clients use
+// for short queries unless told otherwise.
+func TestGraphQLOverGET(t *testing.T) {
+	a := newAPI(t, "")
+	a.gql(`mutation($spec: String!) { applyAgent(spec: $spec) { id } }`, map[string]any{"spec": triageSpec})
+
+	resp, body := a.do("GET", "/graphql?query="+url.QueryEscape(`query($n: String!) { agent(name: $n) { name status } }`)+
+		"&variables="+url.QueryEscape(`{"n":"triage"}`), nil, nil)
+	if resp.StatusCode != 200 || !strings.Contains(body, `"name":"triage"`) {
+		t.Fatalf("query over GET: HTTP %d: %s", resp.StatusCode, body)
+	}
+
+	// A GET must never change anything.
+	_, body = a.do("GET", "/graphql?query="+url.QueryEscape(`mutation { pauseAgent(name: "triage", reason: "x") { status } }`), nil, nil)
+	if strings.Contains(body, `"status":"paused"`) {
+		t.Fatalf("a mutation ran over GET: %s", body)
+	}
+	if got := a.gql(`{ agent(name: "triage") { status } }`, nil); at(t, got, "agent", "status") != "active" {
+		t.Fatalf("agent status after a GET mutation attempt = %v", got)
 	}
 }
 

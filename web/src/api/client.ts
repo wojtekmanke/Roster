@@ -28,6 +28,9 @@ export function createClient(): Client {
     // The dashboard shows live operational state; a stale cache hit is worse
     // than a second request.
     requestPolicy: "cache-and-network",
+    // Always POST. The client's default sends short queries as GET, which
+    // would put every query and its variables into URLs and access logs.
+    preferGetMethod: false,
     fetchOptions: () => {
       const headers: Record<string, string> = {};
       if (credentials.token) headers["Authorization"] = `Bearer ${credentials.token}`;

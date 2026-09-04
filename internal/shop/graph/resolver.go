@@ -27,6 +27,9 @@ type Resolver struct {
 func NewHandler(s *shop.Shop, token string) http.Handler {
 	srv := handler.New(NewExecutableSchema(Config{Resolvers: &Resolver{Shop: s}}))
 	srv.AddTransport(transport.Options{})
+	// GET is accepted for queries because common clients send short queries
+	// that way by default. Mutations over GET are refused by the transport.
+	srv.AddTransport(transport.GET{})
 	srv.AddTransport(transport.POST{})
 	srv.Use(extension.Introspection{})
 	if token == "" {
