@@ -28,6 +28,12 @@ describe("ApprovalCard", () => {
     expect(screen.getByRole("link", { name: "See the run" })).toHaveAttribute("href", "/runs/run_abcdefgh12345678");
   });
 
+  it("has no dangling separator when shown on the run's own page", () => {
+    const { container } = renderWith(<ApprovalCard approval={{ ...pending, run: null }} onDecided={() => {}} />);
+    expect(screen.queryByRole("link", { name: "See the run" })).not.toBeInTheDocument();
+    expect(container.querySelector(".card-head .small")?.textContent).toBe("just now");
+  });
+
   it("approves without needing a note", async () => {
     const mock = mockClient({ data: {} }, { data: { decideApproval: { id: "apr_1", status: "approved" } } });
     const onDecided = vi.fn();

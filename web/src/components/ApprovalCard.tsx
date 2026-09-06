@@ -62,7 +62,12 @@ export function ApprovalCard({ approval, onDecided }: { approval: ApprovalItem; 
           )}
         </div>
         <div className="muted small">
-          {approval.run && <Link to={`/runs/${approval.run.id}`}>See the run</Link>} · {formatAgo(approval.createdAt)}
+          {approval.run && (
+            <>
+              <Link to={`/runs/${approval.run.id}`}>See the run</Link> ·{" "}
+            </>
+          )}
+          {formatAgo(approval.createdAt)}
         </div>
       </header>
       <JsonView value={approval.input} />

@@ -34,7 +34,12 @@ export function StatTile({ label, value, hint }: { label: string; value: string;
 export function JsonView({ value, label }: { value: unknown; label?: string }) {
   const [open, setOpen] = useState(false);
   if (value === null || value === undefined) {
-    return <span className="muted">none</span>;
+    return (
+      <div className="json">
+        {label && <div className="json-label">{label}</div>}
+        <span className="muted">none</span>
+      </div>
+    );
   }
   const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
   const long = text.split("\n").length > 12 || text.length > 600;
