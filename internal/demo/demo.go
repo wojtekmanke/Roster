@@ -142,13 +142,17 @@ func call(name string, input map[string]any) (*llm.Response, error) {
 	return toolCall(name, input), nil
 }
 
-// careful plays every example agent by its instructions, and grades
-// generously when asked to judge.
+// careful plays every example agent by its instructions. Asked to judge, it
+// applies a crude version of the catalogue rubric.
 func careful(req *llm.Request) (*llm.Response, error) {
 	c := read(req)
 	switch {
 	case c.offered["grade"]:
-		return call("grade", map[string]any{"score": 5, "reasoning": "Clear and accurate."})
+		// As a judge it can tell a description from a shrug, and no more.
+		if strings.Contains(req.Messages[0].Text(), "made of") {
+			return call("grade", map[string]any{"score": 5, "reasoning": "Names the product, its material and its colour."})
+		}
+		return call("grade", map[string]any{"score": 1, "reasoning": "Does not describe the product."})
 
 	case c.offered["get_ticket"]:
 		raw, fetched := c.results["get_ticket"]

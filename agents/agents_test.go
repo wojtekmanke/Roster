@@ -214,6 +214,10 @@ func TestExampleAgentsEndToEnd(t *testing.T) {
 		t.Errorf("daily-brief = %v", brief)
 	}
 
+	if q := kpis("catalog-enrichment", "gpt-6-luna")["description_quality"]; q != 1 {
+		t.Errorf("catalog-enrichment shadow: description_quality = %v, want the judge to mark a shrug as 1", q)
+	}
+
 	// The careless shadows were graded on the same work and did worse.
 	for _, shadow := range []struct{ agent, model, kpi string }{
 		{"support-triage", "grok-4.3", "right_call"},

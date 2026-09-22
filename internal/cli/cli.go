@@ -104,8 +104,14 @@ func Run(ctx context.Context, env Env) int {
 	return 0
 }
 
+// logger writes structured logs to stderr. The server logs every run; the
+// one-shot commands print their own results, so they log only problems.
 func (e Env) logger() *slog.Logger {
-	return slog.New(slog.NewJSONHandler(e.Stderr, nil))
+	level := slog.LevelWarn
+	if len(e.Args) > 0 && e.Args[0] == "serve" {
+		level = slog.LevelInfo
+	}
+	return slog.New(slog.NewJSONHandler(e.Stderr, &slog.HandlerOptions{Level: level}))
 }
 
 // openStore connects to the database named by DATABASE_URL.
