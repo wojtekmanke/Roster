@@ -61,6 +61,11 @@ type Env struct {
 	Providers llm.Registry
 	// Version is printed by `roster version`.
 	Version string
+
+	// log is built once per Run. Every part of a command must share one
+	// logger: separate handlers would each lock only their own writes to
+	// the same stream.
+	log *slog.Logger
 }
 
 // Run executes the command and returns its exit status.
@@ -72,6 +77,13 @@ func Run(ctx context.Context, env Env) int {
 		fmt.Fprint(env.Stderr, usage)
 		return 2
 	}
+	// The server logs every run; the one-shot commands print their own
+	// results, so they log only problems.
+	level := slog.LevelWarn
+	if env.Args[0] == "serve" {
+		level = slog.LevelInfo
+	}
+	env.log = slog.New(slog.NewJSONHandler(env.Stderr, &slog.HandlerOptions{Level: level}))
 	var err error
 	switch cmd, args := env.Args[0], env.Args[1:]; cmd {
 	case "serve":
@@ -104,15 +116,7 @@ func Run(ctx context.Context, env Env) int {
 	return 0
 }
 
-// logger writes structured logs to stderr. The server logs every run; the
-// one-shot commands print their own results, so they log only problems.
-func (e Env) logger() *slog.Logger {
-	level := slog.LevelWarn
-	if len(e.Args) > 0 && e.Args[0] == "serve" {
-		level = slog.LevelInfo
-	}
-	return slog.New(slog.NewJSONHandler(e.Stderr, &slog.HandlerOptions{Level: level}))
-}
+func (e Env) logger() *slog.Logger { return e.log }
 
 // openStore connects to the database named by DATABASE_URL.
 func (e Env) openStore(ctx context.Context) (*store.Store, error) {
