@@ -348,9 +348,11 @@ func (r *Resolver) Query() QueryResolver { return &queryResolver{r} }
 // Run returns RunResolver implementation.
 func (r *Resolver) Run() RunResolver { return &runResolver{r} }
 
-type agentResolver struct{ *Resolver }
-type agentEventResolver struct{ *Resolver }
-type approvalResolver struct{ *Resolver }
-type mutationResolver struct{ *Resolver }
-type queryResolver struct{ *Resolver }
-type runResolver struct{ *Resolver }
+type (
+	agentResolver      struct{ *Resolver }
+	agentEventResolver struct{ *Resolver }
+	approvalResolver   struct{ *Resolver }
+	mutationResolver   struct{ *Resolver }
+	queryResolver      struct{ *Resolver }
+	runResolver        struct{ *Resolver }
+)

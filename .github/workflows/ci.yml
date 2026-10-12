@@ -29,7 +29,10 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - run: test -z "$(gofmt -l .)"
       - run: go vet ./...
+      # Fails when the committed GraphQL server code is out of date with a schema.
+      - run: make generate && git diff --exit-code
       - run: go test -race ./...
 
   web:
